@@ -69,7 +69,7 @@ func newServer(f *fakeStore) (*api.Server, http.Handler) {
 
 func do(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Header().Get("X-App-Version") != "v2" {

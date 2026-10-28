@@ -8,6 +8,9 @@
 -- +goose Up
 SET lock_timeout = '1s';
 SET statement_timeout = '10s';
+-- Makes a retry after a partial failure idempotent; the constraint only
+-- exists if this same migration created it.
+-- squawk-ignore ban-drop-constraint
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_names_not_null;
 ALTER TABLE users
     ADD CONSTRAINT users_names_not_null
@@ -16,4 +19,5 @@ ALTER TABLE users
 -- +goose Down
 SET lock_timeout = '1s';
 SET statement_timeout = '10s';
+-- squawk-ignore ban-drop-constraint
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_names_not_null;

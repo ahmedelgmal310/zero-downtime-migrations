@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/ahmedelgmal310/zero-downtime-migrations/internal/check"
 	"github.com/ahmedelgmal310/zero-downtime-migrations/internal/db"
@@ -89,7 +90,7 @@ func runCheck(ctx context.Context, args []string, env Env) error {
 }
 
 func appendJSON(path string, v any) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(filepath.Clean(path), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // operator-supplied output path
 	if err != nil {
 		return err
 	}

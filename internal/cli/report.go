@@ -103,7 +103,7 @@ func loadInputs(dir string) (report.Inputs, error) {
 	if in.Backfill, err = readOptional(filepath.Join(dir, fileBackfill), report.ParseJSONLines[report.Event]); err != nil {
 		return in, err
 	}
-	b, err := os.ReadFile(filepath.Join(dir, fileK6Summary))
+	b, err := os.ReadFile(filepath.Join(dir, fileK6Summary)) //nolint:gosec // operator-supplied results directory
 	if err != nil {
 		return in, err
 	}
@@ -129,7 +129,7 @@ func loadInputs(dir string) (report.Inputs, error) {
 }
 
 func readStepLog(path string) (report.StepLog, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Clean(path)) //nolint:gosec // file inside the operator-supplied results directory
 	if err != nil {
 		return report.StepLog{}, err
 	}
@@ -149,7 +149,7 @@ func readStepLog(path string) (report.StepLog, error) {
 }
 
 func readWith[T any](path string, parse func(io.Reader) ([]T, error)) ([]T, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Clean(path)) //nolint:gosec // file inside the operator-supplied results directory
 	if err != nil {
 		return nil, err
 	}

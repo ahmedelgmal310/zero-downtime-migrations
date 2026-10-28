@@ -37,7 +37,7 @@ for unsafe in testdata/unsafe-migrations/*.sql; do
   out=$(scripts/lint-migrations.sh "$work"/m/*.sql 2>&1)
   rc=$?
   set -e
-  echo "$out" | sed 's/^/    /'
+  while IFS= read -r line; do printf '    %s\n' "$line"; done <<<"$out"
   status="blocked"
   if ((rc == 0)); then
     echo "!! gate passed an unsafe migration: $unsafe" >&2
