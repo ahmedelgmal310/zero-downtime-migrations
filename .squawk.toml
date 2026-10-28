@@ -1,0 +1,13 @@
+# Migration linter configuration (https://squawkhq.com).
+# goose wraps every migration in a transaction unless the file says
+# "+goose NO TRANSACTION"; those files opt out with
+# "-- squawk-disable-assume-in-transaction".
+pg_version = "18.0"
+assume_in_transaction = true
+
+# Opt-in rules that matter for expand/contract: dropping or disabling a trigger
+# silently changes what old code relies on.
+included_rules = [
+    "ban-drop-trigger",
+    "ban-disable-trigger",
+]

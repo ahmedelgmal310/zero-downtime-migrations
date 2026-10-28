@@ -1,0 +1,293 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GO_VERSION: "1.27.3"
+  GOLANGCI_LINT_VERSION: v2.15.0
+  GOVULNCHECK_VERSION: v1.9.0
+  HELM_VERSION: v4.3.1
+  KUBECONFORM_VERSION: v0.8.0
+  KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+  SQUAWK_VERSION: v2.68.0
+  SQUAWK_SHA256: 53070672cbe0b8adce55372931d4435cc2395edd8b5736819a82e483b08d4d09
+  ACTIONLINT_IMAGE: rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+  HADOLINT_IMAGE: mirror.gcr.io/hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+  K6_IMAGE: grafana/k6:2.3.0@sha256:2dd4756ec6e14e62778916e1eb850108e4b499304c02df56760fa0bdb0fba0b8
+  KIND_VERSION: v0.33.0
+  KIND_NODE_IMAGE: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
+  KUBECTL_VERSION: v1.36.4
+  COVERAGE_MIN: "80"
+
+jobs:
+  go:
+    name: Go vet, test (race + coverage, real PostgreSQL), govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18.6-alpine3.24@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+        env:
+          # Throwaway service container reachable only from this job.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      ZDM_TEST_DSN: postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable
+      ZDM_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: go vet
+        run: go vet ./...
+      - name: go test (race, coverage)
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Coverage gate
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {sub("%", "", $3); print $3}')
+          echo "Total coverage: ${total}% (minimum ${COVERAGE_MIN}%)"
+          echo "Go test coverage: **${total}%** (gate ${COVERAGE_MIN}%)" >> "$GITHUB_STEP_SUMMARY"
+          awk -v t="$total" -v m="$COVERAGE_MIN" 'BEGIN { exit !(t + 0 >= m + 0) }'
+      - name: govulncheck
+        run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+  golangci-lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+  static:
+    name: gitleaks, shellcheck, actionlint, hadolint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks (full history)
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
+            "$GITLEAKS_IMAGE" git --no-banner --redact --verbose /repo
+      - name: shellcheck
+        run: shellcheck --version && shellcheck -x scripts/*.sh
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo "$ACTIONLINT_IMAGE" -color
+      - name: hadolint
+        run: docker run --rm -v "$PWD:/work:ro" -w /work "$HADOLINT_IMAGE" hadolint Dockerfile
+
+  migration-lint:
+    name: Migration lint (squawk) + negative test (unsafe migrations must fail)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install squawk
+        run: |
+          curl -fsSLo /tmp/squawk \
+            "https://github.com/sbdchd/squawk/releases/download/${SQUAWK_VERSION}/squawk-linux-x64"
+          echo "${SQUAWK_SHA256}  /tmp/squawk" | sha256sum -c -
+          install -m 0755 /tmp/squawk /usr/local/bin/squawk
+          squawk --version
+      - name: Lint gate on the real migrations
+        run: scripts/lint-migrations.sh
+      - name: Negative test - every unsafe migration must be blocked
+        run: scripts/test-lint-gate.sh
+
+  helm:
+    name: Helm lint, kubeconform
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Install kubeconform
+        run: |
+          curl -fsSLo /tmp/kubeconform.tgz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tgz" | sha256sum -c -
+          tar -xzf /tmp/kubeconform.tgz -C /usr/local/bin kubeconform
+      - name: helm lint (defaults and e2e values)
+        run: |
+          helm lint charts/zdm --strict
+          helm lint charts/zdm --strict -f e2e/values-e2e.yaml --set backfill.enabled=true
+      - name: kubeconform (every release step + backfill Job + PostgreSQL)
+        run: |
+          mkdir -p rendered
+          for step in v1:1 v2:3 v3:3 v3:6; do
+            tag=${step%%:*} target=${step##*:}
+            helm template zdm charts/zdm -n zdm -f e2e/values-e2e.yaml \
+              --set image.tag="$tag" --set migrations.target="$target" > "rendered/${tag}-${target}.yaml"
+          done
+          helm template zdm charts/zdm -n zdm --set backfill.enabled=true \
+            --show-only templates/backfill-job.yaml > rendered/backfill.yaml
+          helm template zdm charts/zdm -n zdm > rendered/defaults.yaml
+          kubeconform -strict -summary -output pretty rendered/ deploy/
+
+  e2e:
+    name: E2E on kind - v1→v2→rollback→v2→v3→contract under k6 load
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [go, helm, migration-lint]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build zdm for the runner (seed, checks, lock sampler, report)
+        run: go build -o bin/zdm ./cmd/zdm
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      - name: Build release v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: zdm:v1
+          build-args: APP_VERSION=v1
+          cache-from: type=gha,scope=zdm
+          cache-to: type=gha,scope=zdm,mode=max
+      - name: Build release v2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: zdm:v2
+          build-args: APP_VERSION=v2
+          cache-from: type=gha,scope=zdm
+      - name: Build release v3
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: zdm:v3
+          build-args: APP_VERSION=v3
+          cache-from: type=gha,scope=zdm
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          version: ${{ env.KIND_VERSION }}
+          node_image: ${{ env.KIND_NODE_IMAGE }}
+          kubectl_version: ${{ env.KUBECTL_VERSION }}
+          cluster_name: zdm
+          config: e2e/kind-config.yaml
+          wait: 120s
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Load images into kind
+        run: |
+          for v in v1 v2 v3; do kind load docker-image "zdm:${v}" --name zdm; done
+          docker pull --quiet "$K6_IMAGE"
+      - name: Rollout scenario under load
+        run: scripts/e2e.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: e2e-results
+          path: e2e-results/
+          retention-days: 90
+          if-no-files-found: ignore
+
+  unsafe-demo:
+    name: DEMO (errors expected) - contract under old code - guard refuses, forced drop fails requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [go, helm]
+    env:
+      SEED_ROWS: "20000"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build zdm for the runner
+        run: go build -o bin/zdm ./cmd/zdm
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      - name: Build release v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: zdm:v1
+          build-args: APP_VERSION=v1
+          cache-from: type=gha,scope=zdm
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          version: ${{ env.KIND_VERSION }}
+          node_image: ${{ env.KIND_NODE_IMAGE }}
+          kubectl_version: ${{ env.KUBECTL_VERSION }}
+          cluster_name: zdm
+          config: e2e/kind-config.yaml
+          wait: 120s
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Load image into kind
+        run: |
+          kind load docker-image zdm:v1 --name zdm
+          docker pull --quiet "$K6_IMAGE"
+      - name: Demo - guard refuses, forced contract breaks v1
+        run: scripts/demo-unsafe.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: unsafe-demo-results
+          path: e2e-results/
+          retention-days: 90
+          if-no-files-found: ignore

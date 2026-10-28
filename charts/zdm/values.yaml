@@ -1,0 +1,78 @@
+# The image tag IS the app release: v1 (baseline), v2 (dual write), v3 (new columns only).
+image:
+  repository: ghcr.io/ahmedelgmal310/zdm
+  tag: v1
+  # Optional digest; when set it is used instead of the tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+replicaCount: 3
+
+database:
+  host: postgres
+  port: 5432
+  name: app
+  user: app
+  sslmode: disable
+  passwordSecret:
+    name: postgres-auth
+    key: password
+
+# Schema migrations run in a Job before the new pods start (pre-install and
+# pre-upgrade hook). The target pins the schema version this release needs:
+#   1 = baseline (v1), 3 = expand (v2, v3), 6 = contract (after v3 is fully out).
+# A target below the current schema version is a no-op: migrations never run
+# down automatically, so `helm rollback` only rolls back the app.
+migrations:
+  enabled: true
+  target: 1
+  lockTimeout: 1s
+  statementTimeout: 2m
+  maxAttempts: 10
+  backoff: 500ms
+  activeDeadlineSeconds: 900
+
+# Batched, throttled backfill. Not part of the release: it is rendered on its
+# own (`helm template --show-only templates/backfill-job.yaml`) so that a
+# `helm rollback` of the app does not delete a running backfill.
+backfill:
+  enabled: false
+  batchSize: 1000
+  pause: 200ms
+  lockTimeout: 1s
+  statementTimeout: 10s
+
+rollout:
+  maxSurge: 1
+  maxUnavailable: 0
+  minReadySeconds: 3
+  # Native sleep hook: the pod keeps serving while Kubernetes removes it from
+  # the Service endpoints, then the app drains with keep-alives disabled.
+  preStopSleepSeconds: 5
+  drainDelay: 3s
+  terminationGracePeriodSeconds: 30
+  revisionHistoryLimit: 5
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+service:
+  type: ClusterIP
+  port: 80
+  # Only used when type is NodePort.
+  nodePort: null
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+jobResources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    memory: 128Mi

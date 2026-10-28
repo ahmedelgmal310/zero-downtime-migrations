@@ -1,0 +1,16 @@
+# The API (NodePort 30080) and PostgreSQL (NodePort 30432) are published on the
+# runner's loopback so k6, the lock sampler and the consistency checks run on
+# the runner itself, outside the cluster they are measuring.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        listenAddress: 127.0.0.1
+        protocol: TCP
+      - containerPort: 30432
+        hostPort: 5432
+        listenAddress: 127.0.0.1
+        protocol: TCP

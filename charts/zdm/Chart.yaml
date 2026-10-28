@@ -1,0 +1,10 @@
+apiVersion: v2
+name: zdm
+description: Users API with zero-downtime schema migrations (expand/contract) run as a Helm pre-upgrade hook
+type: application
+version: 0.1.0
+appVersion: "v1"
+home: https://github.com/ahmedelgmal310/zero-downtime-migrations
+maintainers:
+  - name: Ahmed Elgamal
+    url: https://github.com/ahmedelgmal310

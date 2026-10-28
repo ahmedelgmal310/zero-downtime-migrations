@@ -1,0 +1,15 @@
+# kind e2e: images are built in CI and loaded into the node (`kind load`).
+image:
+  repository: zdm
+  tag: v1
+  pullPolicy: Never
+
+replicaCount: 3
+
+service:
+  type: NodePort
+  nodePort: 30080
+
+backfill:
+  batchSize: 1000
+  pause: 200ms

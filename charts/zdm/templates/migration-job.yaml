@@ -1,0 +1,47 @@
+{{- if .Values.migrations.enabled }}
+# Runs before the new ReplicaSet is created. If it fails (for example the
+# contract guard refuses because old pods are still alive), Helm aborts the
+# upgrade and the running pods are untouched. The Job is kept until the next
+# hook run so its log (per-migration durations) can be collected.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "zdm.fullname" . }}-migrate
+  labels:
+    {{- include "zdm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "zdm.selector" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "zdm.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "zdm.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - migrate
+            - --target={{ .Values.migrations.target }}
+            - --lock-timeout={{ .Values.migrations.lockTimeout }}
+            - --statement-timeout={{ .Values.migrations.statementTimeout }}
+            - --max-attempts={{ .Values.migrations.maxAttempts }}
+            - --backoff={{ .Values.migrations.backoff }}
+          env:
+            {{- include "zdm.dbEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.jobResources | nindent 12 }}
+          securityContext:
+            {{- include "zdm.containerSecurityContext" . | nindent 12 }}
+{{- end }}

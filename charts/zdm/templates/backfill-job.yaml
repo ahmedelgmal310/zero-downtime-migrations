@@ -1,0 +1,43 @@
+{{- if .Values.backfill.enabled }}
+# Rendered on its own, outside the release:
+#   helm template zdm charts/zdm --show-only templates/backfill-job.yaml \
+#     --set backfill.enabled=true --set image.tag=v2 | kubectl apply -n <ns> -f -
+# The Job is idempotent (it only touches rows with NULL first_name), so it can
+# be deleted and re-applied at any time, including after a rollback.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "zdm.fullname" . }}-backfill
+  labels:
+    {{- include "zdm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backfill
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "zdm.selector" . | nindent 8 }}
+        app.kubernetes.io/component: backfill
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "zdm.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: backfill
+          image: {{ include "zdm.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - backfill
+            - --batch-size={{ .Values.backfill.batchSize }}
+            - --pause={{ .Values.backfill.pause }}
+            - --lock-timeout={{ .Values.backfill.lockTimeout }}
+            - --statement-timeout={{ .Values.backfill.statementTimeout }}
+          env:
+            {{- include "zdm.dbEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.jobResources | nindent 12 }}
+          securityContext:
+            {{- include "zdm.containerSecurityContext" . | nindent 12 }}
+{{- end }}
