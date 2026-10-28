@@ -15,6 +15,7 @@ package migrate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -42,6 +43,7 @@ type Options struct {
 	HeartbeatMaxAge  time.Duration // how recent a heartbeat counts as "alive"
 	SkipGuards       bool          // demo only: run guarded migrations unconditionally
 	LockID           int64         // advisory lock id; 0 uses the goose default
+	ConnectWait      time.Duration // keep retrying the first connection this long
 }
 
 // Defaults returns production-like defaults for Options.
@@ -52,6 +54,7 @@ func Defaults() Options {
 		MaxAttempts:      10,
 		Backoff:          500 * time.Millisecond,
 		HeartbeatMaxAge:  20 * time.Second,
+		ConnectWait:      time.Minute,
 	}
 }
 
@@ -107,6 +110,9 @@ func Run(ctx context.Context, dsn string, fsys fs.FS, guards map[int64][]string,
 		return Result{}, fmt.Errorf("load migrations: %w", err)
 	}
 
+	if err := waitForDB(ctx, sqlDB, o.ConnectWait, log); err != nil {
+		return Result{}, err
+	}
 	current, err := p.GetDBVersion(ctx)
 	if err != nil {
 		return Result{}, fmt.Errorf("read schema version: %w", err)
@@ -186,6 +192,28 @@ func checkGuard(ctx context.Context, q fleet.Querier, v int64, retired []string,
 	}
 	log.Info("guard_passed", "version", v, "retired", retired, "alive", alive)
 	return nil
+}
+
+// waitForDB retries the first connection, so a Job that starts while the
+// database is restarting (or a Service is not yet routable) does not fail
+// the whole Helm upgrade.
+func waitForDB(ctx context.Context, sqlDB *sql.DB, wait time.Duration, log *slog.Logger) error {
+	deadline := time.Now().Add(wait)
+	for attempt := 1; ; attempt++ {
+		err := sqlDB.PingContext(ctx)
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return fmt.Errorf("connect: %w", err)
+		}
+		log.Warn("database_not_reachable", "attempt", attempt, "err", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }

@@ -41,11 +41,18 @@ setup_platform() {
   kubectl -n "$NS" create secret generic postgres-auth --from-literal=password="$PGPASSWORD" >/dev/null
   kubectl -n "$NS" apply -f deploy/postgres.yaml >/dev/null
   kubectl -n "$NS" rollout status statefulset/postgres --timeout=180s >/dev/null
-  local i
-  for i in $(seq 1 60); do
-    if pg_isready -q -t 2; then
-      log "postgres ready (${i}s)"
-      return 0
+  # The image's entrypoint runs a temporary server for initdb and restarts it,
+  # so wait for several consecutive successful queries, not a single probe.
+  local i ok=0
+  for i in $(seq 1 90); do
+    if psql -XAtqc 'SELECT 1' >/dev/null 2>&1; then
+      ok=$((ok + 1))
+      if ((ok >= 3)); then
+        log "postgres ready (${i}s)"
+        return 0
+      fi
+    else
+      ok=0
     fi
     sleep 1
   done

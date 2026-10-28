@@ -172,3 +172,16 @@ func TestBadDSN(t *testing.T) {
 		t.Error("want error for a malformed DSN")
 	}
 }
+
+func TestConnectWaitGivesUp(t *testing.T) {
+	o := opts(1)
+	o.ConnectWait = 1500 * time.Millisecond
+	start := time.Now()
+	_, err := migrate.Run(t.Context(), "postgres://nobody@127.0.0.1:1/x?connect_timeout=1", migrations.FS, nil, o, pgtest.Discard())
+	if err == nil || !strings.Contains(err.Error(), "connect") {
+		t.Fatalf("err = %v, want a connect error", err)
+	}
+	if time.Since(start) < time.Second {
+		t.Error("gave up without retrying")
+	}
+}
