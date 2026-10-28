@@ -182,7 +182,7 @@ func runSeed(ctx context.Context, args []string, env Env, log *slog.Logger) erro
 func runLockwatch(ctx context.Context, args []string, env Env, log *slog.Logger) error {
 	fs := newFlags("lockwatch", env)
 	dsn := dsnFlag(fs, env)
-	interval := fs.Duration("interval", 50*time.Millisecond, "sampling interval")
+	interval := fs.Duration("interval", 10*time.Millisecond, "sampling interval")
 	out := fs.String("out", "", "JSON lines output file (default stdout)")
 	if err := fs.Parse(args); err != nil {
 		return err

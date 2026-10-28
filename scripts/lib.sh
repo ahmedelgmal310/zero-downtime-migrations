@@ -174,6 +174,10 @@ stop_load() {
   kill -INT "$LOCKWATCH_PID" 2>/dev/null || true
   wait "$LOCKWATCH_PID" 2>/dev/null || true
   kill "$CONTROL_PID" 2>/dev/null || true
+  # PostgreSQL logs every lock wait longer than deadlock_timeout (100 ms).
+  kubectl -n "$NS" logs statefulset/postgres >"$RESULTS/postgres.log" 2>&1 || true
+  LOCK_WAITS_LOGGED=$(grep -c 'still waiting for' "$RESULTS/postgres.log" || true)
+  log "lock waits > 100 ms logged by PostgreSQL: ${LOCK_WAITS_LOGGED}"
   [[ -s "$RESULTS/k6-summary.json" ]] || die "k6 did not write its summary"
   log "load stopped: $(tr -d '\n ' <"$RESULTS/k6-summary.json")"
 }

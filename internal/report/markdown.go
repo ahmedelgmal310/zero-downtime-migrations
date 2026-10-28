@@ -21,11 +21,11 @@ func (r Result) Markdown(w io.Writer) error {
 	p.f("| **whole run** | | **%d (%d / %d)** | **%d** | %.1f ms | %.1f ms | %.1f ms | %.1f ms | | |\n\n",
 		t.Requests, t.Reads, t.Writes, t.Errors, t.P50, t.P95, t.P99, t.Max)
 	p.f("Load: %.1f req/s average over the run. SLO gate: p95 <= %g ms per step. "+
-		"Lock wait is sampled every 50 ms from `pg_stat_activity`; \"none\" means no API query was seen waiting on a lock.\n\n",
+		"Lock wait is sampled every 10 ms from `pg_stat_activity`; \"none\" means no API query was seen waiting on a lock.\n\n",
 		t.RPS, r.SLOp95Ms)
 
 	if len(r.Migrations) > 0 {
-		p.f("### Migrations (Helm pre-upgrade hook Job)\n\n")
+		p.f("### Migrations (migrator log, per release step)\n\n")
 		p.f("| Release step | Version | Migration | Duration | Attempts |\n|---|---:|---|---:|---:|\n")
 		for _, m := range r.Migrations {
 			p.f("| %s | %d | `%s` | %.1f ms | %d |\n", m.Step, m.Version, m.File, m.DurationMs, m.Attempts)

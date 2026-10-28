@@ -103,6 +103,8 @@ if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
     echo "## Zero-downtime rollout under load (kind)"
     echo
     cat "$RESULTS/report.md"
+    echo
+    echo "Lock waits longer than 100 ms logged by PostgreSQL (log_lock_waits): **${LOCK_WAITS_LOGGED}**"
   } >>"$GITHUB_STEP_SUMMARY"
 fi
 cat "$RESULTS/report.md"
